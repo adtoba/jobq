@@ -1,10 +1,73 @@
 package jobq
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/adtoba/jobq/internal/testdb"
 )
+
+func TestClaim_EmptyQueue(t *testing.T) {
+	workerID := "worker-1"
+
+	db := testdb.New(t)
+	client, err := NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient : %v", err)
+	}
+
+	job, err := client.claim(t.Context(), "default", workerID)
+	if !errors.Is(err, errNoJobs) {
+		t.Fatalf("got %v, want %v", err, errNoJobs)
+	}
+
+	if job != nil {
+		t.Fatalf("claim returned job %d, want nil", job.ID)
+	}
+}
+
+func TestClaim_SkipsIneligibleJobs(t *testing.T) {
+	tests := []struct {
+		name string
+		opts *EnqueueOpts
+	}{
+		{name: "scheduled", opts: &EnqueueOpts{
+			RunAt: time.Now().Add(1 * time.Hour),
+		}},
+		{name: "differentQueue", opts: &EnqueueOpts{
+			Queue: "emails",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testdb.New(t)
+			client, err := NewClient(db)
+
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			args := map[string]any{"to": "user@example.com"}
+
+			_, err = client.Enqueue(t.Context(), "send_email", args, tt.opts)
+			if err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+
+			job, err := client.claim(t.Context(), "default", "worker-1")
+			if !errors.Is(err, errNoJobs) {
+				t.Fatalf("claim error = %v, want %v", err, errNoJobs)
+			}
+
+			if job != nil {
+				t.Fatalf("claim returned job %d, want nil", job.ID)
+			}
+
+		})
+	}
+}
 
 func TestClaim_ClaimsAvailableJob(t *testing.T) {
 	workerID := "worker-1"
