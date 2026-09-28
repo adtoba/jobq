@@ -2,11 +2,94 @@ package jobq
 
 import (
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/adtoba/jobq/internal/testdb"
 )
+
+func TestClaim_ConcurrentWorkersClaimOnce(t *testing.T) {
+	const workers = 20
+	db := testdb.New(t)
+	client, err := NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient : %v", err)
+	}
+
+	args := map[string]any{
+		"to": "user@example.com",
+	}
+
+	id, err := client.Enqueue(t.Context(), "send_email", args, &EnqueueOpts{
+		Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var readyWg sync.WaitGroup
+	var wins, noJobs atomic.Int64
+
+	for i := range workers {
+		wg.Add(1)
+		readyWg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			if _, err := db.Exec(t.Context(), "SELECT 1"); err != nil {
+				t.Errorf("warm-up query: %v", err)
+			}
+
+			readyWg.Done()
+
+			<-start
+
+			workerID := fmt.Sprintf("worker-%d", i)
+
+			_, err := client.claim(t.Context(), "default", workerID)
+
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, errNoJobs):
+				noJobs.Add(1)
+			default:
+				t.Errorf("worker %s, error: %v", workerID, err)
+			}
+		}()
+	}
+	readyWg.Wait()
+	close(start)
+	wg.Wait()
+
+	if wins.Load() != 1 {
+		t.Errorf("got wins %d, want %d", wins.Load(), 1)
+	}
+
+	if noJobs.Load() != workers-1 {
+		t.Errorf("got no jobs %d, want %d", noJobs.Load(), workers-1)
+	}
+
+	var attempt int
+
+	err = db.QueryRow(
+		t.Context(),
+		"SELECT attempt FROM jobs WHERE id = $1",
+		id,
+	).Scan(&attempt)
+	if err != nil {
+		t.Fatalf("DB query failed: %v", err)
+	}
+
+	if attempt != 1 {
+		t.Errorf("attempt = %d, want %d", attempt, 1)
+	}
+}
 
 func TestClaim_HighestPriorityFirst(t *testing.T) {
 	workerID := "worker-1"
