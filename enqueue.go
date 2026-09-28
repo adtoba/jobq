@@ -1,6 +1,7 @@
 package jobq
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,12 @@ func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *Enque
 	}
 
 	argsJSON, err := json.Marshal(args)
+	valid := bytes.Equal(argsJSON, []byte("null"))
+
+	if valid {
+		return 0, ErrEmptyArgs
+	}
+
 	if err != nil {
 		return 0, fmt.Errorf("jobq: invalid args: %w", err)
 	}

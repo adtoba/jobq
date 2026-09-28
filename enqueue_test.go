@@ -29,7 +29,6 @@ func countJobs(t *testing.T, pool *pgxpool.Pool) int {
 
 func TestEnqueue_Defaults(t *testing.T) {
 	db := testdb.New(t)
-	kind := "send_email"
 	args := emailArgs{
 		To: "user@example.com",
 	}
@@ -39,7 +38,8 @@ func TestEnqueue_Defaults(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	id, err := client.Enqueue(t.Context(), kind, args, nil)
+	id, err := client.Enqueue(t.Context(), "send_email", args, nil)
+
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestEnqueue_Defaults(t *testing.T) {
 	}
 
 	var (
-		k           string
+		kind        string
 		queue       string
 		state       string
 		attempt     int
@@ -57,13 +57,18 @@ func TestEnqueue_Defaults(t *testing.T) {
 
 	var gotArgs emailArgs
 
-	err = db.QueryRow(t.Context(), "SELECT kind, queue, state, attempt, max_attempts, args FROM jobs WHERE id = $1", id).Scan(&k, &queue, &state, &attempt, &maxAttempts, &gotArgs)
+	err = db.QueryRow(
+		t.Context(),
+		"SELECT kind, queue, state, attempt, max_attempts, args FROM jobs WHERE id = $1", id).Scan(
+		&kind, &queue, &state, &attempt, &maxAttempts, &gotArgs,
+	)
+
 	if err != nil {
 		t.Fatalf("DB query failed: %v", err)
 	}
 
-	if k != "send_email" {
-		t.Errorf("kind = %q, want %q", k, "send_email")
+	if kind != "send_email" {
+		t.Errorf("kind = %q, want %q", kind, "send_email")
 	}
 
 	if queue != "default" {
@@ -110,5 +115,39 @@ func TestEnqueue_EmptyKind(t *testing.T) {
 	count := countJobs(t, pool)
 	if count != 0 {
 		t.Fatalf("got %d jobs in the table, want 0", count)
+	}
+}
+
+func TestEnqueue_NilArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args any
+	}{
+		{name: "untyped nil", args: nil},
+		{name: "typed nil pointer", args: (*emailArgs)(nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testdb.New(t)
+			client, err := jobq.NewClient(db)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			id, err := client.Enqueue(t.Context(), "send_email", tt.args, nil)
+			if !errors.Is(err, jobq.ErrEmptyArgs) {
+				t.Fatalf("got error %v, want %v", err, jobq.ErrEmptyArgs)
+			}
+
+			if id != 0 {
+				t.Errorf("id = %d, want 0", id)
+			}
+
+			count := countJobs(t, db)
+			if count != 0 {
+				t.Fatalf("got %d jobs in the table, want 0", count)
+			}
+		})
 	}
 }
