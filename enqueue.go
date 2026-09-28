@@ -10,15 +10,39 @@ import (
 )
 
 var (
-	ErrEmptyKind = errors.New("jobq: kind is required")
-	ErrEmptyArgs = errors.New("jobq: args is required")
+	ErrEmptyKind          = errors.New("jobq: kind is required")
+	ErrEmptyArgs          = errors.New("jobq: args is required")
+	ErrInvalidMaxAttempts = errors.New("jobq: invalid max attempts value")
+)
+
+const (
+	defaultQueue       = "default"
+	defaultMaxAttempts = 20
 )
 
 type EnqueueOpts struct {
 	Queue       string // nil value: "default"
 	Priority    int16
 	RunAt       time.Time // nil value: "run now"
-	MaxAttempts int       // zero value: "use default (1)"
+	MaxAttempts int       // zero value: 20 (defaultMaxAttempts)
+}
+
+func withDefaults(opts *EnqueueOpts) EnqueueOpts {
+	out := EnqueueOpts{}
+
+	if opts != nil {
+		out = *opts
+	}
+
+	if out.Queue == "" {
+		out.Queue = defaultQueue
+	}
+
+	if out.MaxAttempts == 0 {
+		out.MaxAttempts = defaultMaxAttempts
+	}
+
+	return out
 }
 
 func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *EnqueueOpts) (int64, error) {
@@ -31,23 +55,38 @@ func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *Enque
 	}
 
 	argsJSON, err := json.Marshal(args)
-	valid := bytes.Equal(argsJSON, []byte("null"))
-
-	if valid {
-		return 0, ErrEmptyArgs
-	}
-
 	if err != nil {
 		return 0, fmt.Errorf("jobq: invalid args: %w", err)
 	}
 
+	isNull := bytes.Equal(argsJSON, []byte("null"))
+
+	if isNull {
+		return 0, ErrEmptyArgs
+	}
+
+	o := withDefaults(opts)
+
+	if o.MaxAttempts < 0 {
+		return 0, errors.New("invalid max attempts")
+	}
+
 	var id int64
+	var runAt *time.Time
+
+	if !o.RunAt.IsZero() {
+		runAt = &o.RunAt
+	}
 
 	err = c.pool.QueryRow(
 		ctx,
-		"INSERT INTO jobs (kind, args) VALUES ($1, $2) RETURNING id",
+		"INSERT INTO jobs (queue, kind, args, priority, max_attempts, run_at) VALUES ($1, $2, $3, $4, $5, COALESCE($6, now())) RETURNING id",
+		o.Queue,
 		kind,
 		argsJSON,
+		o.Priority,
+		o.MaxAttempts,
+		runAt,
 	).Scan(&id)
 
 	if err != nil {

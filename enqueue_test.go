@@ -27,15 +27,59 @@ func countJobs(t *testing.T, pool *pgxpool.Pool) int {
 	return count
 }
 
-func TestEnqueue_Defaults(t *testing.T) {
+func newTestClient(t *testing.T) (*jobq.Client, *pgxpool.Pool) {
+	t.Helper()
 	db := testdb.New(t)
+	client, err := jobq.NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client, db
+}
+
+func TestEnqueue_WithQueue(t *testing.T) {
+	opts := &jobq.EnqueueOpts{
+		Queue: "emails",
+	}
+
+	client, db := newTestClient(t)
+
 	args := emailArgs{
 		To: "user@example.com",
 	}
 
-	client, err := jobq.NewClient(db)
+	id, err := client.Enqueue(t.Context(), "send_email", args, opts)
 	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	if id == 0 {
+		t.Fatalf("Enqueue returned id %d", id)
+	}
+
+	var queue string
+
+	err = db.QueryRow(
+		t.Context(),
+		"SELECT queue FROM jobs WHERE id = $1",
+		id,
+	).Scan(&queue)
+
+	if err != nil {
+		t.Fatalf("DB query failed: %v", err)
+	}
+
+	if queue != "emails" {
+		t.Fatalf("queue = %q, want %q", queue, "emails")
+	}
+}
+
+func TestEnqueue_Defaults(t *testing.T) {
+
+	client, db := newTestClient(t)
+
+	args := emailArgs{
+		To: "user@example.com",
 	}
 
 	id, err := client.Enqueue(t.Context(), "send_email", args, nil)
@@ -93,16 +137,11 @@ func TestEnqueue_Defaults(t *testing.T) {
 }
 
 func TestEnqueue_EmptyKind(t *testing.T) {
-	pool := testdb.New(t)
+	client, db := newTestClient(t)
+
 	args := emailArgs{
 		To: "user@example.com",
 	}
-
-	client, err := jobq.NewClient(pool)
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-
 	id, err := client.Enqueue(t.Context(), "", args, nil)
 	if !errors.Is(err, jobq.ErrEmptyKind) {
 		t.Fatalf("got error %v, want %v", err, jobq.ErrEmptyKind)
@@ -112,7 +151,7 @@ func TestEnqueue_EmptyKind(t *testing.T) {
 		t.Errorf("id should be 0")
 	}
 
-	count := countJobs(t, pool)
+	count := countJobs(t, db)
 	if count != 0 {
 		t.Fatalf("got %d jobs in the table, want 0", count)
 	}
@@ -129,12 +168,7 @@ func TestEnqueue_NilArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := testdb.New(t)
-			client, err := jobq.NewClient(db)
-			if err != nil {
-				t.Fatalf("NewClient: %v", err)
-			}
-
+			client, db := newTestClient(t)
 			id, err := client.Enqueue(t.Context(), "send_email", tt.args, nil)
 			if !errors.Is(err, jobq.ErrEmptyArgs) {
 				t.Fatalf("got error %v, want %v", err, jobq.ErrEmptyArgs)
