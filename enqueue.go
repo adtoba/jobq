@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+var (
+	ErrEmptyKind = errors.New("jobq: kind is required")
+	ErrEmptyArgs = errors.New("jobq: args is required")
+)
+
 type EnqueueOpts struct {
 	Queue       string // nil value: "default"
 	Priority    int16
@@ -17,11 +22,16 @@ type EnqueueOpts struct {
 
 func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *EnqueueOpts) (int64, error) {
 	if kind == "" {
-		return 0, errors.New("jobq: kind cannot be null")
+		return 0, ErrEmptyKind
 	}
-	_, err := json.Marshal(&args)
+
+	if args == nil {
+		return 0, ErrEmptyArgs
+	}
+
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return 0, fmt.Errorf("jobq: Invalid args: %w", err)
+		return 0, fmt.Errorf("jobq: invalid args: %w", err)
 	}
 
 	var id int64
@@ -30,11 +40,11 @@ func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *Enque
 		ctx,
 		"INSERT INTO jobs (kind, args) VALUES ($1, $2) RETURNING id",
 		kind,
-		args,
+		argsJSON,
 	).Scan(&id)
 
 	if err != nil {
-		return 0, fmt.Errorf("jobq: Error inserting a new job: %w", err)
+		return 0, fmt.Errorf("jobq: insert job: %w", err)
 	}
 
 	return id, nil

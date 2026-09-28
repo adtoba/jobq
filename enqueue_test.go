@@ -1,14 +1,30 @@
 package jobq_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/adtoba/jobq"
 	"github.com/adtoba/jobq/internal/testdb"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type emailArgs struct {
 	To string
+}
+
+func countJobs(t *testing.T, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	err := pool.QueryRow(
+		t.Context(),
+		"SELECT count(*) FROM jobs",
+	).Scan(&count)
+
+	if err != nil {
+		t.Fatalf("count jobs failed: %v", err)
+	}
+	return count
 }
 
 func TestEnqueue_Defaults(t *testing.T) {
@@ -69,5 +85,30 @@ func TestEnqueue_Defaults(t *testing.T) {
 	if maxAttempts != 20 {
 		t.Errorf("maxAttempts = %d, want %d", maxAttempts, 20)
 	}
+}
 
+func TestEnqueue_EmptyKind(t *testing.T) {
+	pool := testdb.New(t)
+	args := emailArgs{
+		To: "user@example.com",
+	}
+
+	client, err := jobq.NewClient(pool)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	id, err := client.Enqueue(t.Context(), "", args, nil)
+	if !errors.Is(err, jobq.ErrEmptyKind) {
+		t.Fatalf("got error %v, want %v", err, jobq.ErrEmptyKind)
+	}
+
+	if id != 0 {
+		t.Errorf("id should be 0")
+	}
+
+	count := countJobs(t, pool)
+	if count != 0 {
+		t.Fatalf("got %d jobs in the table, want 0", count)
+	}
 }
