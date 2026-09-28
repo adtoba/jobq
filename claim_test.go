@@ -8,6 +8,63 @@ import (
 	"github.com/adtoba/jobq/internal/testdb"
 )
 
+func TestClaim_HighestPriorityFirst(t *testing.T) {
+	workerID := "worker-1"
+
+	db := testdb.New(t)
+	client, err := NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient : %v", err)
+	}
+
+	args := map[string]any{
+		"to": "user@example.com",
+	}
+
+	lowID, err := client.Enqueue(t.Context(), "send_email", args, &EnqueueOpts{
+		Priority: 0,
+		Queue:    "default",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	highID, err := client.Enqueue(t.Context(), "send_email", args, &EnqueueOpts{
+		Priority: 10,
+		Queue:    "default",
+	})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	job1, err := client.claim(t.Context(), "default", workerID)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if job1.ID != highID {
+		t.Errorf("first claim = job %d, want job %d (high priority)", job1.ID, highID)
+	}
+
+	job2, err := client.claim(t.Context(), "default", workerID)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if job2.ID != lowID {
+		t.Errorf("first claim = job %d, want job %d (low priority)", job2.ID, lowID)
+	}
+
+	job3, err := client.claim(t.Context(), "default", workerID)
+	if !errors.Is(err, errNoJobs) {
+		t.Fatalf("third claim error = %v, want %v", err, errNoJobs)
+	}
+
+	if job3 != nil {
+		t.Fatalf("expected nil job")
+	}
+}
+
 func TestClaim_EmptyQueue(t *testing.T) {
 	workerID := "worker-1"
 
