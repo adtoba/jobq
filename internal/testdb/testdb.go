@@ -16,7 +16,7 @@ import (
 	"github.com/adtoba/jobq/store"
 )
 
-const defaultURL = "postgres://jobq:jobq@localhost:5432/jobq?sslmode=disable"
+const defaultURL = "postgres://jobq:jobq@localhost:5433/jobq?sslmode=disable"
 
 var counter atomic.Int64
 
