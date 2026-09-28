@@ -21,9 +21,9 @@ const (
 )
 
 type EnqueueOpts struct {
-	Queue       string // nil value: "default"
-	Priority    int16
-	RunAt       time.Time // nil value: "run now"
+	Queue       string    // zero value: "default"
+	Priority    int16     // zero value: 0
+	RunAt       time.Time // zero value: "run now"
 	MaxAttempts int       // zero value: 20 (defaultMaxAttempts)
 }
 
@@ -60,7 +60,6 @@ func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *Enque
 	}
 
 	isNull := bytes.Equal(argsJSON, []byte("null"))
-
 	if isNull {
 		return 0, ErrEmptyArgs
 	}
@@ -68,7 +67,7 @@ func (c *Client) Enqueue(ctx context.Context, kind string, args any, opts *Enque
 	o := withDefaults(opts)
 
 	if o.MaxAttempts < 0 {
-		return 0, errors.New("invalid max attempts")
+		return 0, fmt.Errorf("%w: got %d", ErrInvalidMaxAttempts, o.MaxAttempts)
 	}
 
 	var id int64

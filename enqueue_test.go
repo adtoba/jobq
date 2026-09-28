@@ -3,6 +3,7 @@ package jobq_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/adtoba/jobq"
 	"github.com/adtoba/jobq/internal/testdb"
@@ -35,6 +36,76 @@ func newTestClient(t *testing.T) (*jobq.Client, *pgxpool.Pool) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	return client, db
+}
+
+// func TestEnqueue_NilOpts(t *testing.T) {
+// 	tests := []struct {
+// 		name string
+// 		args any
+// 	}{
+// 		{name: "priority", args: 0},
+// 		{name: "maxAttempts", args: 0},
+// 	}
+
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			client, db := newTestClient(t)
+
+// 		})
+// 	}
+// }
+
+func TestEnqueue_EmptyOptsWithDefaults(t *testing.T) {
+	client, db := newTestClient(t)
+
+	args := emailArgs{
+		To: "user@example.com",
+	}
+
+	opts := &jobq.EnqueueOpts{}
+
+	id, err := client.Enqueue(
+		t.Context(),
+		"send_email",
+		args,
+		opts,
+	)
+
+	if err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	if id == 0 {
+		t.Fatalf("Enqueue returned id %d", id)
+	}
+
+	var (
+		queue       string
+		maxAttempts int
+		runAt       time.Time
+	)
+
+	err = db.QueryRow(
+		t.Context(),
+		"SELECT queue, max_attempts, run_at FROM jobs WHERE id = $1",
+		id,
+	).Scan(&queue, &maxAttempts, &runAt)
+
+	if err != nil {
+		t.Fatalf("DB query failed: %v", err)
+	}
+
+	if queue != "default" {
+		t.Errorf("queue = %q, want default", queue)
+	}
+
+	if maxAttempts != 20 {
+		t.Errorf("maxAttempts = %d, want 20", maxAttempts)
+	}
+
+	if duration := time.Since(runAt); duration > 5*time.Second || duration < -5*time.Second {
+		t.Errorf("run_at = %v, want within 5s of now", runAt)
+	}
 }
 
 func TestEnqueue_WithQueue(t *testing.T) {
@@ -75,7 +146,6 @@ func TestEnqueue_WithQueue(t *testing.T) {
 }
 
 func TestEnqueue_Defaults(t *testing.T) {
-
 	client, db := newTestClient(t)
 
 	args := emailArgs{
