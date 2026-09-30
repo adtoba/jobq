@@ -16,8 +16,9 @@ var (
 )
 
 const (
-	defaultQueue       = "default"
-	defaultMaxAttempts = 20
+	defaultQueue        = "default"
+	defaultMaxAttempts  = 20
+	defaultPollInterval = 1
 )
 
 type EnqueueOpts struct {
