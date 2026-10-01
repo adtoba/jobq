@@ -71,6 +71,44 @@ func (w *Worker) Register(kind string, handler HandlerFunc) error {
 	}
 
 	w.handlers[kind] = handler
-
 	return nil
+}
+
+func (w *Worker) Run(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		job, err := w.client.claim(ctx, w.queue, w.workerID)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				// stop: return from Run
+				return nil
+			case <-time.After(w.pollInterval):
+				// done waiting: try again
+			}
+			continue
+		}
+
+		handler, exists := w.handlers[job.Kind]
+		if !exists {
+			_ = w.client.fail(ctx, job.ID, w.workerID, fmt.Errorf("jobq: no handler registered for kind %q", job.Kind))
+			continue
+		}
+
+		err = handler(ctx, job)
+
+		if err != nil {
+			//remember to log error
+			_ = w.client.fail(ctx, job.ID, w.workerID, fmt.Errorf("%s", err))
+		} else {
+			// remember to log the error
+			_ = w.client.complete(ctx, job.ID, w.workerID)
+		}
+
+	}
 }

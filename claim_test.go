@@ -11,6 +11,133 @@ import (
 	"github.com/adtoba/jobq/internal/testdb"
 )
 
+func TestClaim_ClaimBatch(t *testing.T) {
+	ctx := t.Context()
+	db := testdb.New(t)
+	client, err := NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	for range 5 {
+		args := map[string]any{
+			"to": "user@example.com",
+		}
+		_, err := client.Enqueue(ctx, "send_email", args, &EnqueueOpts{})
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	jobs, err := client.claimBatch(ctx, "default", "worker-1", 3)
+	if err != nil {
+		t.Fatalf("claim batch: %v", err)
+	}
+
+	var count int
+
+	err = client.pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM jobs WHERE state = 'running'",
+	).Scan(&count)
+
+	if count != 3 {
+		t.Errorf("claim batch returned %d, wanted 3", len(jobs))
+	}
+
+	jobs, err = client.claimBatch(ctx, "default", "worker-1", 10)
+	if err != nil {
+		t.Fatalf("claim batch: %v", err)
+	}
+
+	if len(jobs) != 2 {
+		t.Errorf("claim batch returned %d, wanted 2", len(jobs))
+	}
+
+	jobs, err = client.claimBatch(ctx, "default", "worker-1", 10)
+	if err != nil {
+		t.Fatalf("claim batch: %v", err)
+	}
+
+	if len(jobs) != 0 {
+		t.Errorf("claim batch returned %d, wanted 0", len(jobs))
+	}
+}
+
+func TestClaim_ConcurrentClaimBatch(t *testing.T) {
+	const (
+		totalJobs = 100
+		workers   = 10
+		batchSize = 20
+	)
+	ctx := t.Context()
+
+	db := testdb.New(t)
+	client, err := NewClient(db)
+	if err != nil {
+		t.Fatalf("NewClient: %q", err)
+	}
+
+	for i := range totalJobs {
+		args := map[string]any{
+			"num": i,
+		}
+		_, err := client.Enqueue(ctx, "send_email", args, &EnqueueOpts{})
+		if err != nil {
+			t.Fatalf("enqueue: %q", err)
+		}
+	}
+
+	var (
+		wg     sync.WaitGroup
+		ready  sync.WaitGroup
+		start  = make(chan struct{})
+		idChan = make(chan int64)
+	)
+
+	for i := range workers {
+		wg.Add(1)
+		ready.Add(1)
+		go func() {
+			defer wg.Done()
+
+			if _, err := db.Exec(ctx, "SELECT 1"); err != nil {
+				t.Errorf("worker %d: warm up %v", i, err)
+			}
+			ready.Done()
+			<-start
+
+			jobs, err := client.claimBatch(ctx, "default", fmt.Sprintf("worker-%d", i), batchSize)
+			if err != nil {
+				t.Errorf("worker %d: claim job: %v", i, err)
+			}
+
+			for _, job := range jobs {
+				idChan <- job.ID
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(idChan)
+	}()
+
+	ready.Wait()
+	close(start)
+
+	seen := make(map[int64]bool)
+	for id := range idChan {
+		if seen[id] {
+			t.Errorf("job %d claimed twice", id)
+		}
+		seen[id] = true
+	}
+
+	if len(seen) != totalJobs {
+		t.Errorf("claimed %d distinct jobs, want %d", len(seen), totalJobs)
+	}
+}
+
 func TestClaim_ConcurrentWorkersClaimOnce(t *testing.T) {
 	const workers = 20
 	db := testdb.New(t)

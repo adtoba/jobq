@@ -1,4 +1,4 @@
-DATABASE_URL ?= postgres://jobq:jobq@localhost:5432/jobq?sslmode=disable
+DATABASE_URL ?= postgres://jobq:jobq@localhost:5433/jobq?sslmode=disable
 export DATABASE_URL
 
 .PHONY: db-up db-down db-reset psql vet test test-race check
